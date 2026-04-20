@@ -604,6 +604,14 @@ mod tests {
 			pricing.get_defillama_id("WETH"),
 			Some("coingecko:ethereum".to_string())
 		);
+		assert_eq!(
+			pricing.get_defillama_id("EURC"),
+			Some("coingecko:euro-coin".to_string())
+		);
+		assert_eq!(
+			pricing.get_defillama_id("euroc"),
+			Some("coingecko:euro-coin".to_string())
+		);
 		assert_eq!(pricing.get_defillama_id("UNKNOWN"), None);
 	}
 

@@ -676,6 +676,14 @@ mod tests {
 			pricing.get_coingecko_id("WETH"),
 			Some("ethereum".to_string())
 		);
+		assert_eq!(
+			pricing.get_coingecko_id("EURC"),
+			Some("euro-coin".to_string())
+		);
+		assert_eq!(
+			pricing.get_coingecko_id("euroc"),
+			Some("euro-coin".to_string())
+		);
 		assert_eq!(pricing.get_coingecko_id("UNKNOWN"), None);
 	}
 

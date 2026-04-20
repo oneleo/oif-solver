@@ -69,6 +69,8 @@ pub const DEFAULT_TOKEN_MAPPINGS: &[(&str, &str)] = &[
 	("SOLANA", "solana"),
 	("BTC", "bitcoin"),
 	("BITCOIN", "bitcoin"),
+	("EURC", "euro-coin"),
+	("EUROC", "euro-coin"),
 	("USDC", "usd-coin"),
 	("USDT", "tether"),
 	("DAI", "dai"),
@@ -359,6 +361,8 @@ mod tests {
 		// Check some key mappings exist
 		assert!(DEFAULT_TOKEN_MAPPINGS.contains(&("ETH", "ethereum")));
 		assert!(DEFAULT_TOKEN_MAPPINGS.contains(&("BTC", "bitcoin")));
+		assert!(DEFAULT_TOKEN_MAPPINGS.contains(&("EURC", "euro-coin")));
+		assert!(DEFAULT_TOKEN_MAPPINGS.contains(&("EUROC", "euro-coin")));
 		assert!(DEFAULT_TOKEN_MAPPINGS.contains(&("USDC", "usd-coin")));
 	}
 
