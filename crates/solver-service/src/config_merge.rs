@@ -800,6 +800,10 @@ fn build_operator_hyperlane_config_from_seed(
 		},
 		routes,
 		intent_min_expiry_seconds: None,
+		delivery_check_timeout_ms: None,
+		delivery_retry_max_retries: None,
+		delivery_retry_initial_backoff_ms: None,
+		delivery_retry_max_backoff_ms: None,
 	})
 }
 
@@ -959,6 +963,10 @@ fn build_operator_hyperlane_config_from_override(
 		},
 		routes,
 		intent_min_expiry_seconds: override_cfg.intent_min_expiry_seconds,
+		delivery_check_timeout_ms: override_cfg.delivery_check_timeout_ms,
+		delivery_retry_max_retries: override_cfg.delivery_retry_max_retries,
+		delivery_retry_initial_backoff_ms: override_cfg.delivery_retry_initial_backoff_ms,
+		delivery_retry_max_backoff_ms: override_cfg.delivery_retry_max_backoff_ms,
 	})
 }
 
@@ -1520,6 +1528,21 @@ fn build_hyperlane_json_from_operator(
 			"intent_min_expiry_seconds".to_string(),
 			int(min_expiry as i64),
 		);
+	}
+	if let Some(v) = hyperlane.delivery_check_timeout_ms {
+		table.insert("delivery_check_timeout_ms".to_string(), int(v as i64));
+	}
+	if let Some(v) = hyperlane.delivery_retry_max_retries {
+		table.insert("delivery_retry_max_retries".to_string(), int(v as i64));
+	}
+	if let Some(v) = hyperlane.delivery_retry_initial_backoff_ms {
+		table.insert(
+			"delivery_retry_initial_backoff_ms".to_string(),
+			int(v as i64),
+		);
+	}
+	if let Some(v) = hyperlane.delivery_retry_max_backoff_ms {
+		table.insert("delivery_retry_max_backoff_ms".to_string(), int(v as i64));
 	}
 
 	// Build oracles map
@@ -2503,6 +2526,26 @@ fn extract_hyperlane_config(
 		.and_then(|v| v.as_i64())
 		.filter(|v| *v >= 0)
 		.map(|v| v as u64);
+	let delivery_check_timeout_ms = hyperlane_json
+		.and_then(|h| h.get("delivery_check_timeout_ms"))
+		.and_then(|v| v.as_i64())
+		.filter(|v| *v >= 0)
+		.map(|v| v as u64);
+	let delivery_retry_max_retries = hyperlane_json
+		.and_then(|h| h.get("delivery_retry_max_retries"))
+		.and_then(|v| v.as_i64())
+		.filter(|v| *v >= 0)
+		.map(|v| v as u32);
+	let delivery_retry_initial_backoff_ms = hyperlane_json
+		.and_then(|h| h.get("delivery_retry_initial_backoff_ms"))
+		.and_then(|v| v.as_i64())
+		.filter(|v| *v >= 0)
+		.map(|v| v as u64);
+	let delivery_retry_max_backoff_ms = hyperlane_json
+		.and_then(|h| h.get("delivery_retry_max_backoff_ms"))
+		.and_then(|v| v.as_i64())
+		.filter(|v| *v >= 0)
+		.map(|v| v as u64);
 
 	// Extract mailboxes
 	let mut mailboxes = HashMap::new();
@@ -2618,6 +2661,10 @@ fn extract_hyperlane_config(
 		},
 		routes,
 		intent_min_expiry_seconds,
+		delivery_check_timeout_ms,
+		delivery_retry_max_retries,
+		delivery_retry_initial_backoff_ms,
+		delivery_retry_max_backoff_ms,
 	}
 }
 
@@ -4099,6 +4146,10 @@ mod tests {
 					message_timeout_seconds: None,
 					finalization_required: None,
 					intent_min_expiry_seconds: None,
+					delivery_check_timeout_ms: None,
+					delivery_retry_max_retries: None,
+					delivery_retry_initial_backoff_ms: None,
+					delivery_retry_max_backoff_ms: None,
 				}),
 				direct: None,
 				broadcaster: None,
@@ -4228,6 +4279,10 @@ mod tests {
 					message_timeout_seconds: None,
 					finalization_required: None,
 					intent_min_expiry_seconds: None,
+					delivery_check_timeout_ms: None,
+					delivery_retry_max_retries: None,
+					delivery_retry_initial_backoff_ms: None,
+					delivery_retry_max_backoff_ms: None,
 				}),
 				direct: None,
 				broadcaster: None,
@@ -4687,6 +4742,10 @@ mod tests {
 					message_timeout_seconds: Some(600),
 					finalization_required: Some(true),
 					intent_min_expiry_seconds: None,
+					delivery_check_timeout_ms: None,
+					delivery_retry_max_retries: None,
+					delivery_retry_initial_backoff_ms: None,
+					delivery_retry_max_backoff_ms: None,
 				}),
 				direct: None,
 				broadcaster: Some(BroadcasterSettlementOverride {
@@ -4857,6 +4916,10 @@ mod tests {
 					message_timeout_seconds: Some(600),
 					finalization_required: Some(true),
 					intent_min_expiry_seconds: None,
+					delivery_check_timeout_ms: None,
+					delivery_retry_max_retries: None,
+					delivery_retry_initial_backoff_ms: None,
+					delivery_retry_max_backoff_ms: None,
 				}),
 				direct: None,
 				broadcaster: None,
@@ -5079,6 +5142,10 @@ mod tests {
 					message_timeout_seconds: None,
 					finalization_required: None,
 					intent_min_expiry_seconds: None,
+					delivery_check_timeout_ms: None,
+					delivery_retry_max_retries: None,
+					delivery_retry_initial_backoff_ms: None,
+					delivery_retry_max_backoff_ms: None,
 				}),
 				direct: None,
 				broadcaster: None,
@@ -5565,6 +5632,10 @@ mod tests {
 					},
 					routes: HashMap::new(),
 					intent_min_expiry_seconds: None,
+					delivery_check_timeout_ms: None,
+					delivery_retry_max_retries: None,
+					delivery_retry_initial_backoff_ms: None,
+					delivery_retry_max_backoff_ms: None,
 				}),
 				direct: None,
 				broadcaster: None,

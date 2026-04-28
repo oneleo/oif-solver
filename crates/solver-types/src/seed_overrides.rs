@@ -206,6 +206,18 @@ pub struct HyperlaneSettlementOverride {
 	/// Optional minimum required `expires` window (seconds) for accepting intents.
 	#[serde(default)]
 	pub intent_min_expiry_seconds: Option<u64>,
+	/// Timeout for each delivery-check RPC attempt.
+	#[serde(default)]
+	pub delivery_check_timeout_ms: Option<u64>,
+	/// Max retry attempts for transient delivery-check failures.
+	#[serde(default)]
+	pub delivery_retry_max_retries: Option<u32>,
+	/// Initial backoff for delivery-check retry.
+	#[serde(default)]
+	pub delivery_retry_initial_backoff_ms: Option<u64>,
+	/// Max backoff cap for delivery-check retry.
+	#[serde(default)]
+	pub delivery_retry_max_backoff_ms: Option<u64>,
 }
 
 /// Direct settlement override payload.

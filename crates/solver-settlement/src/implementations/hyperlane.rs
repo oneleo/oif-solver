@@ -23,6 +23,7 @@ use solver_types::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Custom serialization for U256
 mod u256_serde {
@@ -52,6 +53,35 @@ fn keccak256(data: &str) -> FixedBytes<32> {
 	hasher.update(data.as_bytes());
 	let result = hasher.finalize();
 	FixedBytes::<32>::from_slice(&result)
+}
+
+fn is_transient_delivery_error(err: &SettlementError) -> bool {
+	let msg = err.to_string().to_lowercase();
+	msg.contains("timeout")
+		|| msg.contains("temporarily")
+		|| msg.contains("connection")
+		|| msg.contains("transport")
+		|| msg.contains("rpc")
+		|| msg.contains("429")
+		|| msg.contains("503")
+}
+
+fn classify_delivery_waiting_reason(err: &SettlementError) -> crate::WaitingReason {
+	let msg = err.to_string().to_lowercase();
+	if msg.contains("no submission info") {
+		return crate::WaitingReason::NoSubmissionState;
+	}
+	if msg.contains("failed to load hyperlane message state") {
+		return crate::WaitingReason::StorageUnavailable;
+	}
+	if msg.contains("timeout")
+		|| msg.contains("transport")
+		|| msg.contains("connection")
+		|| msg.contains("rpc")
+	{
+		return crate::WaitingReason::RpcUnavailable;
+	}
+	crate::WaitingReason::Unknown
 }
 
 /// Convert order ID string to bytes32
@@ -501,6 +531,10 @@ pub struct HyperlaneSettlement {
 	igp_addresses: HashMap<u64, solver_types::Address>,
 	message_tracker: Arc<MessageTracker>,
 	default_gas_limit: u64,
+	delivery_check_timeout_ms: u64,
+	delivery_retry_max_retries: u32,
+	delivery_retry_initial_backoff_ms: u64,
+	delivery_retry_max_backoff_ms: u64,
 }
 
 impl HyperlaneSettlement {
@@ -550,15 +584,64 @@ impl HyperlaneSettlement {
 		let provider = self.providers.get(&oracle_chain).ok_or_else(|| {
 			SettlementError::ValidationFailed(format!("No provider for chain {oracle_chain}"))
 		})?;
-		check_is_proven(
+		let prove_future = check_is_proven(
 			provider,
 			&oracle_address,
 			remote_chain,
 			remote_oracle,
 			application,
 			payload_hash,
+		);
+		match tokio::time::timeout(
+			Duration::from_millis(self.delivery_check_timeout_ms),
+			prove_future,
 		)
 		.await
+		{
+			Ok(result) => result,
+			Err(_) => Err(SettlementError::ValidationFailed(format!(
+				"delivery check timeout after {}ms",
+				self.delivery_check_timeout_ms
+			))),
+		}
+	}
+
+	async fn is_payload_proven_with_retry(
+		&self,
+		oracle_chain: u64,
+		oracle_address: solver_types::Address,
+		remote_chain: u64,
+		remote_oracle: [u8; 32],
+		application: [u8; 32],
+		payload_hash: [u8; 32],
+	) -> Result<bool, SettlementError> {
+		let mut backoff_ms = self.delivery_retry_initial_backoff_ms;
+		for attempt in 0..=self.delivery_retry_max_retries {
+			match self
+				.is_payload_proven(
+					oracle_chain,
+					oracle_address.clone(),
+					remote_chain,
+					remote_oracle,
+					application,
+					payload_hash,
+				)
+				.await
+			{
+				Ok(v) => return Ok(v),
+				Err(err) => {
+					if !is_transient_delivery_error(&err) || attempt == self.delivery_retry_max_retries {
+						return Err(err);
+					}
+					tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+					backoff_ms =
+						(backoff_ms.saturating_mul(2)).min(self.delivery_retry_max_backoff_ms);
+				},
+			}
+		}
+		Err(SettlementError::ValidationFailed(
+			"delivery check retries exhausted".to_string(),
+		))
 	}
 
 	/// Check if a Hyperlane message has been delivered
@@ -628,7 +711,7 @@ impl HyperlaneSettlement {
 		let application_bytes = address_to_bytes32(&application);
 
 		let is_proven = self
-			.is_payload_proven(
+			.is_payload_proven_with_retry(
 				dest_chain,          // Chain where we call isProven (destination of message)
 				input_oracle,        // Input oracle on destination chain
 				origin_chain,        // Remote chain (origin of message)
@@ -709,6 +792,10 @@ impl HyperlaneSettlement {
 		mailbox_addresses: HashMap<u64, solver_types::Address>,
 		igp_addresses: HashMap<u64, solver_types::Address>,
 		default_gas_limit: u64,
+		delivery_check_timeout_ms: u64,
+		delivery_retry_max_retries: u32,
+		delivery_retry_initial_backoff_ms: u64,
+		delivery_retry_max_backoff_ms: u64,
 		storage: Arc<StorageService>,
 	) -> Result<Self, SettlementError> {
 		// Collect unique network IDs from input and output oracles
@@ -739,6 +826,10 @@ impl HyperlaneSettlement {
 			igp_addresses,
 			message_tracker: Arc::new(message_tracker),
 			default_gas_limit,
+			delivery_check_timeout_ms,
+			delivery_retry_max_retries,
+			delivery_retry_initial_backoff_ms,
+			delivery_retry_max_backoff_ms,
 		})
 	}
 
@@ -875,9 +966,53 @@ impl ConfigSchema for HyperlaneSettlementSchema {
 					},
 				),
 				Field::new("finalization_required", FieldType::Boolean),
+				Field::new(
+					"delivery_check_timeout_ms",
+					FieldType::Integer {
+						min: Some(100),
+						max: Some(120000),
+					},
+				),
+				Field::new(
+					"delivery_retry_max_retries",
+					FieldType::Integer {
+						min: Some(0),
+						max: Some(10),
+					},
+				),
+				Field::new(
+					"delivery_retry_initial_backoff_ms",
+					FieldType::Integer {
+						min: Some(50),
+						max: Some(60000),
+					},
+				),
+				Field::new(
+					"delivery_retry_max_backoff_ms",
+					FieldType::Integer {
+						min: Some(50),
+						max: Some(120000),
+					},
+				),
 			],
 		);
-		schema.validate(config)
+		schema.validate(config)?;
+		let initial_backoff = config
+			.get("delivery_retry_initial_backoff_ms")
+			.and_then(|v| v.as_u64())
+			.unwrap_or(500);
+		let max_backoff = config
+			.get("delivery_retry_max_backoff_ms")
+			.and_then(|v| v.as_u64())
+			.unwrap_or(5_000);
+		if max_backoff < initial_backoff {
+			return Err(solver_types::ValidationError::InvalidValue {
+				field: "delivery_retry_max_backoff_ms".to_string(),
+				message: "delivery_retry_max_backoff_ms must be >= delivery_retry_initial_backoff_ms"
+					.to_string(),
+			});
+		}
+		Ok(())
 	}
 }
 
@@ -988,51 +1123,49 @@ impl SettlementInterface for HyperlaneSettlement {
 	}
 
 	async fn can_claim(&self, order: &Order, fill_proof: &FillProof) -> bool {
-		tracing::debug!(
-			order_id = %solver_types::utils::formatting::truncate_id(&order.id),
-			"Checking Hyperlane claim readiness"
-		);
+		matches!(
+			self.readiness(order, fill_proof).await,
+			crate::SettlementReadiness::Ready
+		)
+	}
 
-		// Extract message ID from attestation data
+	async fn readiness(
+		&self,
+		order: &Order,
+		fill_proof: &FillProof,
+	) -> crate::SettlementReadiness {
+		let order_id = solver_types::utils::formatting::truncate_id(&order.id);
 		let message_id = match &fill_proof.attestation_data {
 			Some(data) if data.len() == 64 => {
 				let mut id = [0u8; 32];
 				if hex::decode_to_slice(data, &mut id).is_ok() {
 					Some(id)
 				} else {
-					None
+					return crate::SettlementReadiness::PermanentFailure(
+						"invalid hyperlane message id in fill proof".to_string(),
+					);
 				}
 			},
 			_ => None,
 		};
 
-		// No message = can claim immediately
-		if message_id.is_none() {
-			tracing::debug!(
-				order_id = %solver_types::utils::formatting::truncate_id(&order.id),
-				"No Hyperlane message, claim ready"
-			);
-			return true;
-		}
+		// No hyperlane message attached => directly claimable
+		let Some(message_id) = message_id else {
+			return crate::SettlementReadiness::Ready;
+		};
 
-		// Check if message has been delivered
-		match self.check_delivery(order, message_id.unwrap()).await {
-			Ok(delivered) => {
-				if delivered {
-					tracing::debug!(
-						order_id = %solver_types::utils::formatting::truncate_id(&order.id),
-						"Hyperlane message delivered, claim ready"
-					);
-				}
-				delivered
-			},
-			Err(e) => {
-				tracing::error!(
-					order_id = %solver_types::utils::formatting::truncate_id(&order.id),
-					error = %e,
-					"Error checking Hyperlane delivery"
+		match self.check_delivery(order, message_id).await {
+			Ok(true) => crate::SettlementReadiness::Ready,
+			Ok(false) => crate::SettlementReadiness::Waiting(crate::WaitingReason::ProofNotCommittedYet),
+			Err(err) => {
+				let reason = classify_delivery_waiting_reason(&err);
+				tracing::warn!(
+					order_id = %order_id,
+					error = %err,
+					?reason,
+					"Hyperlane readiness check waiting due to delivery check error"
 				);
-				false
+				crate::SettlementReadiness::Waiting(reason)
 			},
 		}
 	}
@@ -1283,6 +1416,22 @@ pub fn create_settlement(
 		.get("default_gas_limit")
 		.and_then(|v| v.as_i64())
 		.unwrap_or(500000) as u64;
+	let delivery_check_timeout_ms = config
+		.get("delivery_check_timeout_ms")
+		.and_then(|v| v.as_u64())
+		.unwrap_or(8_000);
+	let delivery_retry_max_retries = config
+		.get("delivery_retry_max_retries")
+		.and_then(|v| v.as_u64())
+		.unwrap_or(2) as u32;
+	let delivery_retry_initial_backoff_ms = config
+		.get("delivery_retry_initial_backoff_ms")
+		.and_then(|v| v.as_u64())
+		.unwrap_or(500);
+	let delivery_retry_max_backoff_ms = config
+		.get("delivery_retry_max_backoff_ms")
+		.and_then(|v| v.as_u64())
+		.unwrap_or(5_000);
 
 	// Create settlement service synchronously
 	let settlement = tokio::task::block_in_place(|| {
@@ -1293,6 +1442,10 @@ pub fn create_settlement(
 				mailbox_addresses,
 				igp_addresses,
 				default_gas_limit,
+				delivery_check_timeout_ms,
+				delivery_retry_max_retries,
+				delivery_retry_initial_backoff_ms,
+				delivery_retry_max_backoff_ms,
 				storage,
 			)
 			.await

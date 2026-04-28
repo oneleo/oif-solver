@@ -42,6 +42,10 @@
       "default_gas_limit": 500000,
       "message_timeout_seconds": 600,
       "finalization_required": true,
+      "delivery_check_timeout_ms": 8000,
+      "delivery_retry_max_retries": 3,
+      "delivery_retry_initial_backoff_ms": 500,
+      "delivery_retry_max_backoff_ms": 5000,
       "mailboxes": {
         "2494104990": "0xB50E9F9CB52543D754768dD67f1e6148ABd78B0B",
         "998": "0x589C201a07c26b4725A4A829d772f24423da480B"
