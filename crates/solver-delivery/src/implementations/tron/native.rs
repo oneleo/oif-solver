@@ -7,7 +7,7 @@
 //! - normalized conversion to solver types
 
 use crate::{DeliveryError, DeliveryInterface, TransactionTrackingWithConfig};
-use alloy_primitives::{Bytes, U256};
+use alloy_primitives::{B256, Bytes, U256};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
@@ -78,15 +78,23 @@ impl RetryPolicy {
 
 pub struct TronNativeDelivery {
 	endpoints_by_chain: HashMap<u64, Vec<String>>,
+	signers_by_chain: HashMap<u64, AccountSigner>,
 	client: Client,
 	retry_policy: RetryPolicy,
+	retry_policy_by_chain: HashMap<u64, RetryPolicy>,
+	fee_limit_sun: u64,
+	receipt_poll_interval_ms: u64,
 }
 
 impl TronNativeDelivery {
 	async fn new(
 		network_ids: Vec<u64>,
 		networks: &NetworksConfig,
+		signers_by_chain: HashMap<u64, AccountSigner>,
 		retry_policy: RetryPolicy,
+		retry_policy_by_chain: HashMap<u64, RetryPolicy>,
+		fee_limit_sun: u64,
+		receipt_poll_interval_ms: u64,
 	) -> Result<Self, DeliveryError> {
 		if network_ids.is_empty() {
 			return Err(DeliveryError::Network(
@@ -121,8 +129,12 @@ impl TronNativeDelivery {
 
 		let delivery = Self {
 			endpoints_by_chain,
+			signers_by_chain,
 			client,
 			retry_policy,
+			retry_policy_by_chain,
+			fee_limit_sun,
+			receipt_poll_interval_ms,
 		};
 
 		// Validate endpoint liveness and network identity using eth_chainId.
@@ -137,6 +149,18 @@ impl TronNativeDelivery {
 		}
 
 		Ok(delivery)
+	}
+
+	fn clone_for_background(&self) -> Self {
+		Self {
+			endpoints_by_chain: self.endpoints_by_chain.clone(),
+			signers_by_chain: self.signers_by_chain.clone(),
+			client: self.client.clone(),
+			retry_policy: self.retry_policy.clone(),
+			retry_policy_by_chain: self.retry_policy_by_chain.clone(),
+			fee_limit_sun: self.fee_limit_sun,
+			receipt_poll_interval_ms: self.receipt_poll_interval_ms,
+		}
 	}
 
 	fn not_implemented(operation: &str) -> DeliveryError {
@@ -156,6 +180,20 @@ impl TronNativeDelivery {
 			})
 	}
 
+	fn get_signer(&self, chain_id: u64) -> Result<&AccountSigner, DeliveryError> {
+		self.signers_by_chain.get(&chain_id).ok_or_else(|| {
+			DeliveryError::Network(format!(
+				"Tron RPC error: no signer configured for chain {chain_id}"
+			))
+		})
+	}
+
+	fn retry_policy_for_chain(&self, chain_id: u64) -> &RetryPolicy {
+		self.retry_policy_by_chain
+			.get(&chain_id)
+			.unwrap_or(&self.retry_policy)
+	}
+
 	async fn rpc_call<T: DeserializeOwned>(
 		&self,
 		chain_id: u64,
@@ -163,11 +201,12 @@ impl TronNativeDelivery {
 		params: Value,
 	) -> Result<T, DeliveryError> {
 		let endpoints = self.get_endpoints(chain_id)?;
+		let retry_policy = self.retry_policy_for_chain(chain_id);
 		let mut failures: Vec<String> = Vec::new();
 
 		for endpoint in endpoints {
-			let mut backoff_ms = self.retry_policy.initial_backoff_ms;
-			for attempt in 0..=self.retry_policy.max_retries {
+			let mut backoff_ms = retry_policy.initial_backoff_ms;
+			for attempt in 0..=retry_policy.max_retries {
 				match self.rpc_call_single::<T>(endpoint, method, params.clone()).await {
 					Ok(result) => return Ok(result),
 					Err(AttemptError {
@@ -177,13 +216,13 @@ impl TronNativeDelivery {
 						let failure = format!(
 							"endpoint={endpoint} method={method} attempt={attempt}: {message}"
 						);
-						if !retriable || attempt == self.retry_policy.max_retries {
+						if !retriable || attempt == retry_policy.max_retries {
 							failures.push(failure);
 							break;
 						}
 
 						tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-						backoff_ms = (backoff_ms.saturating_mul(2)).min(self.retry_policy.max_backoff_ms);
+						backoff_ms = (backoff_ms.saturating_mul(2)).min(retry_policy.max_backoff_ms);
 					},
 				}
 			}
@@ -256,6 +295,242 @@ impl TronNativeDelivery {
 			None => Ok(None),
 		}
 	}
+
+	async fn tron_wallet_call<T: DeserializeOwned>(
+		&self,
+		chain_id: u64,
+		path: &str,
+		body: &Value,
+	) -> Result<T, DeliveryError> {
+		let endpoints = self.get_endpoints(chain_id)?;
+		let retry_policy = self.retry_policy_for_chain(chain_id);
+		let mut failures: Vec<String> = Vec::new();
+
+		for endpoint in endpoints {
+			let wallet_url = wallet_url_from_rpc(endpoint, path)?;
+			let mut backoff_ms = retry_policy.initial_backoff_ms;
+
+			for attempt in 0..=retry_policy.max_retries {
+				match self
+					.tron_wallet_call_single(&wallet_url, body.clone())
+					.await
+				{
+					Ok(raw_value) => {
+						if is_tron_upstream_unavailable(&raw_value) {
+							let failure = format!(
+								"url={wallet_url} path={path} attempt={attempt}: upstream unavailable"
+							);
+							if attempt == retry_policy.max_retries {
+								failures.push(failure);
+								break;
+							}
+							tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+							backoff_ms = (backoff_ms.saturating_mul(2)).min(retry_policy.max_backoff_ms);
+							continue;
+						}
+
+						let parsed = serde_json::from_value::<T>(raw_value).map_err(|e| {
+							DeliveryError::Network(format!(
+								"Tron RPC error: failed to decode wallet response: {e}"
+							))
+						})?;
+						return Ok(parsed);
+					},
+					Err(AttemptError {
+						message,
+						retriable,
+					}) => {
+						let failure =
+							format!("url={wallet_url} path={path} attempt={attempt}: {message}");
+						if !retriable || attempt == retry_policy.max_retries {
+							failures.push(failure);
+							break;
+						}
+						tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+						backoff_ms = (backoff_ms.saturating_mul(2)).min(retry_policy.max_backoff_ms);
+					},
+				}
+			}
+		}
+
+		Err(DeliveryError::Network(format!(
+			"Tron RPC error: all wallet endpoints failed on chain {chain_id} for {path}: {}",
+			failures.join(" | ")
+		)))
+	}
+
+	async fn tron_wallet_call_single(
+		&self,
+		wallet_url: &str,
+		body: Value,
+	) -> Result<Value, AttemptError> {
+		let response = self
+			.client
+			.post(wallet_url)
+			.json(&body)
+			.send()
+			.await
+			.map_err(classify_reqwest_error)?;
+
+		let status = response.status();
+		if !status.is_success() {
+			let retriable = status.is_server_error() || status.as_u16() == 429;
+			return Err(if retriable {
+				AttemptError::retriable(format!("http status {}", status.as_u16()))
+			} else {
+				AttemptError::non_retriable(format!("http status {}", status.as_u16()))
+			});
+		}
+
+		response
+			.json::<Value>()
+			.await
+			.map_err(|e| AttemptError::non_retriable(format!("invalid wallet response body: {e}")))
+	}
+
+	async fn monitor_submit_tracking(
+		&self,
+		tracking: TransactionTrackingWithConfig,
+		tx_hash: TransactionHash,
+		chain_id: u64,
+	) {
+		let start = std::time::Instant::now();
+		let timeout = Duration::from_secs(tracking.monitoring_timeout_seconds);
+
+		loop {
+			if start.elapsed() >= timeout {
+				(tracking.tracking.callback)(crate::TransactionMonitoringEvent::Failed {
+					id: tracking.tracking.id,
+					tx_hash: tx_hash.clone(),
+					tx_type: tracking.tracking.tx_type,
+					error: "Tron RPC error: transaction monitoring timed out".to_string(),
+				});
+				return;
+			}
+
+			match self.get_receipt(&tx_hash, chain_id).await {
+				Ok(receipt) => {
+					(tracking.tracking.callback)(crate::TransactionMonitoringEvent::Confirmed {
+						id: tracking.tracking.id,
+						tx_hash: tx_hash.clone(),
+						tx_type: tracking.tracking.tx_type,
+						receipt,
+					});
+					return;
+				},
+				Err(err) => {
+					// Keep polling while transaction is still pending/unavailable.
+					if !err
+						.to_string()
+						.contains("transaction receipt not found on chain")
+					{
+						(tracking.tracking.callback)(crate::TransactionMonitoringEvent::Failed {
+							id: tracking.tracking.id,
+							tx_hash: tx_hash.clone(),
+							tx_type: tracking.tracking.tx_type,
+							error: err.to_string(),
+						});
+						return;
+					}
+				},
+			}
+
+			tokio::time::sleep(Duration::from_millis(self.receipt_poll_interval_ms)).await;
+		}
+	}
+
+	async fn submit_via_tron_wallet(
+		&self,
+		tx: &Transaction,
+		signer: &AccountSigner,
+	) -> Result<TransactionHash, DeliveryError> {
+		let to = tx.to.as_ref().ok_or_else(|| {
+			DeliveryError::Network(
+				"Tron RPC error: submit requires contract destination address".to_string(),
+			)
+		})?;
+		if to.0.len() != 20 {
+			return Err(DeliveryError::Network(format!(
+				"Tron RPC error: destination address must be 20 bytes, got {}",
+				to.0.len()
+			)));
+		}
+
+		let owner_address = evm20_to_tron_hex41(signer.address().as_slice())?;
+		let contract_address = evm20_to_tron_hex41(&to.0)?;
+		let data = hex::encode(&tx.data);
+		let call_value: u64 = tx.value.try_into().map_err(|_| {
+			DeliveryError::Network("Tron RPC error: tx.value exceeds u64 for call_value".to_string())
+		})?;
+
+		let trigger_request = json!({
+			"owner_address": owner_address,
+			"contract_address": contract_address,
+			"data": data,
+			"call_value": call_value,
+			"fee_limit": self.fee_limit_sun,
+			"visible": false
+		});
+
+		let trigger: TronTriggerResponse = self
+			.tron_wallet_call(tx.chain_id, "/wallet/triggersmartcontract", &trigger_request)
+			.await?;
+
+		let result = trigger.result.unwrap_or(TronResultFlag { result: false, code: None, message: None });
+		if !result.result {
+			let detail = result
+				.message
+				.or(trigger.message)
+				.or(result.code)
+				.or(trigger.code)
+				.unwrap_or_else(|| "trigger smart contract failed".to_string());
+			return Err(DeliveryError::Network(format!("Tron RPC error: {detail}")));
+		}
+
+		let txid_hex = trigger
+			.tx_id
+			.or(trigger.txid)
+			.ok_or_else(|| DeliveryError::Network("Tron RPC error: missing txID in trigger response".to_string()))?;
+		let txid_bytes = parse_hex_bytes(&txid_hex)?;
+		if txid_bytes.len() != 32 {
+			return Err(DeliveryError::Network(format!(
+				"Tron RPC error: txID must be 32 bytes, got {}",
+				txid_bytes.len()
+			)));
+		}
+		let txid = B256::from_slice(&txid_bytes);
+
+		let signature = signer
+			.sign_hash(&txid)
+			.await
+			.map_err(|e| DeliveryError::Network(format!("Tron RPC error: signing failed: {e}")))?;
+		let signature_hex = hex::encode(signature.as_bytes());
+
+		let mut signed_tx = trigger.transaction.ok_or_else(|| {
+			DeliveryError::Network("Tron RPC error: missing unsigned transaction in trigger response".to_string())
+		})?;
+
+		if let Some(obj) = signed_tx.as_object_mut() {
+			obj.insert("signature".to_string(), json!([signature_hex]));
+		} else {
+			return Err(DeliveryError::Network(
+				"Tron RPC error: malformed trigger transaction payload".to_string(),
+			));
+		}
+
+		let broadcast: TronBroadcastResponse = self
+			.tron_wallet_call(tx.chain_id, "/wallet/broadcasttransaction", &signed_tx)
+			.await?;
+		if !broadcast.result {
+			let detail = broadcast
+				.message
+				.or(broadcast.code)
+				.unwrap_or_else(|| "broadcast failed".to_string());
+			return Err(DeliveryError::Network(format!("Tron RPC error: {detail}")));
+		}
+
+		Ok(TransactionHash(txid_bytes))
+	}
 }
 
 pub struct TronNativeDeliverySchema;
@@ -318,6 +593,24 @@ impl ConfigSchema for TronNativeDeliverySchema {
 						max: None,
 					},
 				),
+				Field::new(
+					"fee_limit_sun",
+					FieldType::Integer {
+						min: Some(1),
+						max: None,
+					},
+				),
+				Field::new(
+					"receipt_poll_interval_ms",
+					FieldType::Integer {
+						min: Some(100),
+						max: None,
+					},
+				),
+				Field::new(
+					"retry_by_chain",
+					FieldType::Table(Schema::new(vec![], vec![])),
+				),
 			],
 		);
 		schema.validate(config)?;
@@ -350,10 +643,25 @@ impl DeliveryInterface for TronNativeDelivery {
 
 	async fn submit(
 		&self,
-		_tx: Transaction,
-		_tracking: Option<TransactionTrackingWithConfig>,
+		tx: Transaction,
+		tracking: Option<TransactionTrackingWithConfig>,
 	) -> Result<TransactionHash, DeliveryError> {
-		Err(Self::not_implemented("submit"))
+		if !self.endpoints_by_chain.contains_key(&tx.chain_id) {
+			return Err(DeliveryError::NoImplementationAvailable);
+		}
+		let signer = self.get_signer(tx.chain_id)?;
+		let tx_hash = self.submit_via_tron_wallet(&tx, signer).await?;
+
+		if let Some(tracking) = tracking {
+			let tx_hash_clone = tx_hash.clone();
+			let this = self.clone_for_background();
+			tokio::spawn(async move {
+				this.monitor_submit_tracking(tracking, tx_hash_clone, tx.chain_id)
+					.await;
+			});
+		}
+
+		Ok(tx_hash)
 	}
 
 	async fn get_receipt(
@@ -520,13 +828,21 @@ impl DeliveryInterface for TronNativeDelivery {
 pub fn create_tron_native_delivery(
 	config: &serde_json::Value,
 	networks: &NetworksConfig,
-	_default_signer: &AccountSigner,
-	_network_signers: &HashMap<u64, AccountSigner>,
+	default_signer: &AccountSigner,
+	network_signers: &HashMap<u64, AccountSigner>,
 ) -> Result<Box<dyn DeliveryInterface>, DeliveryError> {
 	TronNativeDeliverySchema::validate_config(config)
 		.map_err(|e| DeliveryError::Network(format!("Tron RPC error: invalid configuration: {e}")))?;
 
 	let retry_policy = RetryPolicy::from_config(config)?;
+	let fee_limit_sun = config
+		.get("fee_limit_sun")
+		.and_then(Value::as_u64)
+		.unwrap_or(100_000_000);
+	let receipt_poll_interval_ms = config
+		.get("receipt_poll_interval_ms")
+		.and_then(Value::as_u64)
+		.unwrap_or(3_000);
 	let network_ids = config
 		.get("network_ids")
 		.and_then(Value::as_array)
@@ -537,9 +853,28 @@ pub fn create_tron_native_delivery(
 		})
 		.ok_or_else(|| DeliveryError::Network("Tron RPC error: network_ids is required".to_string()))?;
 
+	let retry_policy_by_chain = parse_retry_overrides(config)?;
+	let mut signers_by_chain = HashMap::new();
+	for chain_id in &network_ids {
+		let signer = network_signers
+			.get(chain_id)
+			.cloned()
+			.unwrap_or_else(|| default_signer.clone());
+		signers_by_chain.insert(*chain_id, signer);
+	}
+
 	let delivery = tokio::task::block_in_place(|| {
 		tokio::runtime::Handle::current().block_on(async {
-			TronNativeDelivery::new(network_ids, networks, retry_policy).await
+			TronNativeDelivery::new(
+				network_ids,
+				networks,
+				signers_by_chain,
+				retry_policy,
+				retry_policy_by_chain,
+				fee_limit_sun,
+				receipt_poll_interval_ms,
+			)
+			.await
 		})
 	})?;
 
@@ -614,6 +949,81 @@ struct RpcLog {
 struct RpcBlock {
 	number: String,
 	timestamp: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TronTriggerResponse {
+	result: Option<TronResultFlag>,
+	transaction: Option<Value>,
+	#[serde(rename = "txID")]
+	tx_id: Option<String>,
+	txid: Option<String>,
+	message: Option<String>,
+	code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TronResultFlag {
+	result: bool,
+	code: Option<String>,
+	message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TronBroadcastResponse {
+	result: bool,
+	code: Option<String>,
+	message: Option<String>,
+}
+
+fn parse_retry_overrides(config: &Value) -> Result<HashMap<u64, RetryPolicy>, DeliveryError> {
+	let Some(retry_by_chain) = config.get("retry_by_chain").and_then(Value::as_object) else {
+		return Ok(HashMap::new());
+	};
+	let mut out = HashMap::new();
+	for (chain_id_str, override_cfg) in retry_by_chain {
+		let chain_id = chain_id_str.parse::<u64>().map_err(|e| {
+			DeliveryError::Network(format!(
+				"Tron RPC error: retry_by_chain key must be u64 chain id: {e}"
+			))
+		})?;
+		let policy = RetryPolicy::from_config(override_cfg)?;
+		out.insert(chain_id, policy);
+	}
+	Ok(out)
+}
+
+fn wallet_url_from_rpc(rpc_url: &str, wallet_path: &str) -> Result<String, DeliveryError> {
+	let mut url = reqwest::Url::parse(rpc_url)
+		.map_err(|e| DeliveryError::Network(format!("Tron RPC error: invalid RPC URL: {e}")))?;
+	url.set_query(None);
+	url.set_fragment(None);
+	url.set_path(wallet_path);
+	Ok(url.to_string())
+}
+
+fn evm20_to_tron_hex41(evm20: &[u8]) -> Result<String, DeliveryError> {
+	if evm20.len() != 20 {
+		return Err(DeliveryError::Network(format!(
+			"Tron RPC error: expected 20-byte EVM address, got {}",
+			evm20.len()
+		)));
+	}
+	Ok(format!("41{}", hex::encode(evm20)))
+}
+
+fn classify_reqwest_error(err: reqwest::Error) -> AttemptError {
+	if err.is_timeout() || err.is_connect() || err.is_request() {
+		return AttemptError::retriable(format!("request failed: {err}"));
+	}
+	AttemptError::non_retriable(format!("request failed: {err}"))
+}
+
+fn is_tron_upstream_unavailable(value: &Value) -> bool {
+	let lower = value.to_string().to_lowercase();
+	lower.contains("upstream unavailable")
+		|| lower.contains("service unavailable")
+		|| lower.contains("temporarily unavailable")
 }
 
 fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, DeliveryError> {
