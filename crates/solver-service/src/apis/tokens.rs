@@ -12,7 +12,7 @@ use axum::{
 use serde::Serialize;
 use solver_config::Config;
 use solver_core::SolverEngine;
-use solver_types::{networks::NetworkType, with_0x_prefix};
+use solver_types::{evm20_bytes_to_tron_base58, networks::NetworkType, with_0x_prefix};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -47,6 +47,9 @@ pub struct NetworkTokens {
 pub struct TokenInfo {
 	/// Token contract address.
 	pub address: String,
+	/// Optional Tron Base58Check representation for frontend readability.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub tron_base58: Option<String>,
 	/// Token symbol (e.g., "USDC", "USDT").
 	pub symbol: String,
 	/// Optional token name (e.g., "USD Coin").
@@ -79,6 +82,7 @@ pub async fn get_assets(State(solver): State<Arc<SolverEngine>>) -> Json<TokensR
 					.iter()
 					.map(|t| TokenInfo {
 						address: with_0x_prefix(&hex::encode(&t.address.0)),
+						tron_base58: evm20_bytes_to_tron_base58(&t.address.0).ok(),
 						symbol: t.symbol.clone(),
 						name: t.name.clone(),
 						decimals: t.decimals,
@@ -112,6 +116,7 @@ pub async fn get_assets_for_chain(
 				.iter()
 				.map(|t| TokenInfo {
 					address: with_0x_prefix(&hex::encode(&t.address.0)),
+					tron_base58: evm20_bytes_to_tron_base58(&t.address.0).ok(),
 					symbol: t.symbol.clone(),
 					name: t.name.clone(),
 					decimals: t.decimals,
@@ -149,6 +154,7 @@ pub async fn get_assets_from_config(
 					.iter()
 					.map(|t| TokenInfo {
 						address: with_0x_prefix(&hex::encode(&t.address.0)),
+						tron_base58: evm20_bytes_to_tron_base58(&t.address.0).ok(),
 						symbol: t.symbol.clone(),
 						name: t.name.clone(),
 						decimals: t.decimals,
@@ -183,6 +189,7 @@ pub async fn get_assets_for_chain_from_config(
 				.iter()
 				.map(|t| TokenInfo {
 					address: with_0x_prefix(&hex::encode(&t.address.0)),
+					tron_base58: evm20_bytes_to_tron_base58(&t.address.0).ok(),
 					symbol: t.symbol.clone(),
 					name: t.name.clone(),
 					decimals: t.decimals,
@@ -647,6 +654,7 @@ mod tests {
 				output_settler: "0x0987654321098765432109876543210987654321".to_string(),
 				assets: vec![TokenInfo {
 					address: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd".to_string(),
+					tron_base58: None,
 					symbol: "TEST".to_string(),
 					name: Some("Test Token".to_string()),
 					decimals: 18,
@@ -674,12 +682,14 @@ mod tests {
 			assets: vec![
 				TokenInfo {
 					address: "0x3333333333333333333333333333333333333333".to_string(),
+					tron_base58: None,
 					symbol: "TOKEN1".to_string(),
 					name: Some("Token One".to_string()),
 					decimals: 6,
 				},
 				TokenInfo {
 					address: "0x4444444444444444444444444444444444444444".to_string(),
+					tron_base58: None,
 					symbol: "TOKEN2".to_string(),
 					name: Some("Token Two".to_string()),
 					decimals: 18,
@@ -700,6 +710,7 @@ mod tests {
 	fn test_token_info_serialization() {
 		let token_info = TokenInfo {
 			address: "0x5555555555555555555555555555555555555555".to_string(),
+			tron_base58: None,
 			symbol: "MYTOKEN".to_string(),
 			name: Some("My Token".to_string()),
 			decimals: 8,

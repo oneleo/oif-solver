@@ -163,12 +163,6 @@ impl TronNativeDelivery {
 		}
 	}
 
-	fn not_implemented(operation: &str) -> DeliveryError {
-		DeliveryError::Network(format!(
-			"NotImplemented: tron_native {operation} is not implemented"
-		))
-	}
-
 	fn get_endpoints(&self, chain_id: u64) -> Result<&[String], DeliveryError> {
 		self.endpoints_by_chain
 			.get(&chain_id)
@@ -540,6 +534,34 @@ impl TronNativeDelivery {
 
 		Ok(TransactionHash(txid_bytes))
 	}
+
+	async fn tron_constant_call(
+		&self,
+		chain_id: u64,
+		req: &TronConstantCallRequest,
+	) -> Result<TronConstantCallResponse, DeliveryError> {
+		let body = json!({
+			"owner_address": req.owner_address,
+			"contract_address": req.contract_address,
+			"function_selector": req.function_selector,
+			"parameter": req.parameter,
+			"visible": req.visible
+		});
+		let response: TronConstantCallResponse = self
+			.tron_wallet_call(chain_id, "/wallet/triggerconstantcontract", &body)
+			.await?;
+		if let Some(result) = &response.result {
+			if !result.result {
+				let detail = result
+					.message
+					.clone()
+					.or(result.code.clone())
+					.unwrap_or_else(|| "constant call failed".to_string());
+				return Err(DeliveryError::Network(format!("Tron RPC error: {detail}")));
+			}
+		}
+		Ok(response)
+	}
 }
 
 pub struct TronNativeDeliverySchema;
@@ -729,25 +751,108 @@ impl DeliveryInterface for TronNativeDelivery {
 
 	async fn get_balance(
 		&self,
-		_address: &str,
-		_token: Option<&str>,
-		_chain_id: u64,
+		address: &str,
+		token: Option<&str>,
+		chain_id: u64,
 	) -> Result<String, DeliveryError> {
-		Err(Self::not_implemented("get_balance"))
+		if !self.endpoints_by_chain.contains_key(&chain_id) {
+			return Err(DeliveryError::NoImplementationAvailable);
+		}
+		let address = normalize_any_address_to_20(address)?;
+		let address_hex41 = evm20_bytes_to_tron_hex41(&address.0)
+			.map_err(|e| DeliveryError::Network(format!("Tron RPC error: {e}")))?;
+
+		match token {
+			None => {
+				let body = json!({
+					"address": address_hex41,
+					"visible": false
+				});
+				let account: TronGetAccountResponse =
+					self.tron_wallet_call(chain_id, "/wallet/getaccount", &body).await?;
+				Ok(account.balance.unwrap_or(0).to_string())
+			},
+			Some(token_address) => {
+				let token = normalize_any_address_to_20(token_address)?;
+				let token_hex41 = evm20_bytes_to_tron_hex41(&token.0)
+					.map_err(|e| DeliveryError::Network(format!("Tron RPC error: {e}")))?;
+				let encoded_owner = encode_abi_address(&address.0);
+				let call = TronConstantCallRequest {
+					owner_address: address_hex41,
+					contract_address: token_hex41,
+					function_selector: "balanceOf(address)".to_string(),
+					parameter: encoded_owner,
+					visible: false,
+				};
+				let response = self.tron_constant_call(chain_id, &call).await?;
+				let raw = response
+					.constant_result
+					.and_then(|mut arr| arr.drain(..).next())
+					.ok_or_else(|| {
+						DeliveryError::Network(
+							"Tron RPC error: missing constant_result for balanceOf".to_string(),
+						)
+					})?;
+				parse_u256_data_word(&raw).map(|v| v.to_string())
+			},
+		}
 	}
 
 	async fn get_allowance(
 		&self,
-		_owner: &str,
-		_spender: &str,
-		_token_address: &str,
-		_chain_id: u64,
+		owner: &str,
+		spender: &str,
+		token_address: &str,
+		chain_id: u64,
 	) -> Result<String, DeliveryError> {
-		Err(Self::not_implemented("get_allowance"))
+		if !self.endpoints_by_chain.contains_key(&chain_id) {
+			return Err(DeliveryError::NoImplementationAvailable);
+		}
+		let owner = normalize_any_address_to_20(owner)?;
+		let spender = normalize_any_address_to_20(spender)?;
+		let token = normalize_any_address_to_20(token_address)?;
+
+		let owner_hex41 = evm20_bytes_to_tron_hex41(&owner.0)
+			.map_err(|e| DeliveryError::Network(format!("Tron RPC error: {e}")))?;
+		let token_hex41 = evm20_bytes_to_tron_hex41(&token.0)
+			.map_err(|e| DeliveryError::Network(format!("Tron RPC error: {e}")))?;
+		let encoded_params = format!(
+			"{}{}",
+			encode_abi_address(&owner.0),
+			encode_abi_address(&spender.0)
+		);
+		let call = TronConstantCallRequest {
+			owner_address: owner_hex41,
+			contract_address: token_hex41,
+			function_selector: "allowance(address,address)".to_string(),
+			parameter: encoded_params,
+			visible: false,
+		};
+		let response = self.tron_constant_call(chain_id, &call).await?;
+		let raw = response
+			.constant_result
+			.and_then(|mut arr| arr.drain(..).next())
+			.ok_or_else(|| {
+				DeliveryError::Network(
+					"Tron RPC error: missing constant_result for allowance".to_string(),
+				)
+			})?;
+		parse_u256_data_word(&raw).map(|v| v.to_string())
 	}
 
-	async fn get_nonce(&self, _address: &str, _chain_id: u64) -> Result<u64, DeliveryError> {
-		Err(Self::not_implemented("get_nonce"))
+	async fn get_nonce(&self, address: &str, chain_id: u64) -> Result<u64, DeliveryError> {
+		if !self.endpoints_by_chain.contains_key(&chain_id) {
+			return Err(DeliveryError::NoImplementationAvailable);
+		}
+		let address = normalize_any_address_to_20(address)?;
+		let nonce_hex: String = self
+			.rpc_call(
+				chain_id,
+				"eth_getTransactionCount",
+				json!([bytes_to_0x(&address.0), "pending"]),
+			)
+			.await?;
+		parse_u64_quantity(&nonce_hex)
 	}
 
 	async fn get_block_number(&self, chain_id: u64) -> Result<u64, DeliveryError> {
@@ -762,8 +867,82 @@ impl DeliveryInterface for TronNativeDelivery {
 		parse_u64_quantity(&block.number)
 	}
 
-	async fn estimate_gas(&self, _tx: Transaction) -> Result<u64, DeliveryError> {
-		Err(Self::not_implemented("estimate_gas"))
+	async fn estimate_gas(&self, tx: Transaction) -> Result<u64, DeliveryError> {
+		if !self.endpoints_by_chain.contains_key(&tx.chain_id) {
+			return Err(DeliveryError::NoImplementationAvailable);
+		}
+		let signer = self.get_signer(tx.chain_id)?;
+		let to = tx.to.as_ref().ok_or_else(|| {
+			DeliveryError::Network(
+				"Tron RPC error: estimate_gas requires contract destination".to_string(),
+			)
+		})?;
+		let owner_hex41 = evm20_bytes_to_tron_hex41(signer.address().as_slice())
+			.map_err(|e| DeliveryError::Network(format!("Tron RPC error: {e}")))?;
+		let contract_hex41 = evm20_bytes_to_tron_hex41(&to.0)
+			.map_err(|e| DeliveryError::Network(format!("Tron RPC error: {e}")))?;
+		let call_value: u64 = tx.value.try_into().map_err(|_| {
+			DeliveryError::Network("Tron RPC error: tx.value exceeds u64 for call_value".to_string())
+		})?;
+
+		// Tron semantics:
+		// - energy_required: smart-contract execution resource (closest to EVM gas)
+		// - net_usage/bandwidth: transaction byte/network resource
+		// We return energy_required as estimate_gas result.
+		let estimate_req = json!({
+			"owner_address": owner_hex41,
+			"contract_address": contract_hex41,
+			"data": hex::encode(&tx.data),
+			"call_value": call_value,
+			"fee_limit": self.fee_limit_sun,
+			"visible": false
+		});
+		let estimate: TronEstimateEnergyResponse = self
+			.tron_wallet_call(tx.chain_id, "/wallet/estimateenergy", &estimate_req)
+			.await?;
+
+		let result_ok = estimate.result.as_ref().map(|r| r.result).unwrap_or(false);
+		if result_ok {
+			let energy = estimate.energy_required.or(estimate.energy_used).ok_or_else(|| {
+				DeliveryError::Network(
+					"Tron RPC error: estimateenergy succeeded but missing energy fields".to_string(),
+				)
+			})?;
+			tracing::debug!(
+				chain_id = tx.chain_id,
+				energy_required = energy,
+				bandwidth_bytes = estimate.net_usage.unwrap_or_default(),
+				"Tron estimate_gas resolved (energy as gas-equivalent)"
+			);
+			return Ok(energy);
+		}
+
+		// Fallback: triggersmartcontract dry-run response can still provide energy_used.
+		let trigger: TronTriggerResponse = self
+			.tron_wallet_call(tx.chain_id, "/wallet/triggersmartcontract", &estimate_req)
+			.await?;
+		let trigger_ok = trigger.result.as_ref().map(|r| r.result).unwrap_or(false);
+		if !trigger_ok {
+			let detail = trigger
+				.result
+				.and_then(|r| r.message.or(r.code))
+				.or(trigger.message)
+				.or(trigger.code)
+				.unwrap_or_else(|| "estimate energy failed".to_string());
+			return Err(DeliveryError::Network(format!("Tron RPC error: {detail}")));
+		}
+		let energy = trigger.energy_used.ok_or_else(|| {
+			DeliveryError::Network(
+				"Tron RPC error: triggersmartcontract missing energy_used for estimate".to_string(),
+			)
+		})?;
+		tracing::debug!(
+			chain_id = tx.chain_id,
+			energy_required = energy,
+			bandwidth_bytes = trigger.net_usage.unwrap_or_default(),
+			"Tron estimate_gas fallback resolved (energy as gas-equivalent)"
+		);
+		Ok(energy)
 	}
 
 	async fn eth_call(&self, tx: Transaction) -> Result<Bytes, DeliveryError> {
@@ -967,6 +1146,8 @@ struct TronTriggerResponse {
 	#[serde(rename = "txID")]
 	tx_id: Option<String>,
 	txid: Option<String>,
+	energy_used: Option<u64>,
+	net_usage: Option<u64>,
 	message: Option<String>,
 	code: Option<String>,
 }
@@ -983,6 +1164,33 @@ struct TronBroadcastResponse {
 	result: bool,
 	code: Option<String>,
 	message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TronEstimateEnergyResponse {
+	result: Option<TronResultFlag>,
+	energy_required: Option<u64>,
+	energy_used: Option<u64>,
+	net_usage: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TronConstantCallResponse {
+	result: Option<TronResultFlag>,
+	constant_result: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TronGetAccountResponse {
+	balance: Option<u64>,
+}
+
+struct TronConstantCallRequest {
+	owner_address: String,
+	contract_address: String,
+	function_selector: String,
+	parameter: String,
+	visible: bool,
 }
 
 fn parse_retry_overrides(config: &Value) -> Result<HashMap<u64, RetryPolicy>, DeliveryError> {
@@ -1023,6 +1231,33 @@ fn is_tron_upstream_unavailable(value: &Value) -> bool {
 	lower.contains("upstream unavailable")
 		|| lower.contains("service unavailable")
 		|| lower.contains("temporarily unavailable")
+}
+
+fn normalize_any_address_to_20(value: &str) -> Result<Address, DeliveryError> {
+	solver_types::parse_address(value)
+		.map_err(|e| DeliveryError::Network(format!("Tron RPC error: invalid address: {e}")))
+}
+
+fn encode_abi_address(address20: &[u8]) -> String {
+	let mut padded = [0u8; 32];
+	padded[12..].copy_from_slice(address20);
+	hex::encode(padded)
+}
+
+fn parse_u256_data_word(value: &str) -> Result<U256, DeliveryError> {
+	let clean = value.strip_prefix("0x").unwrap_or(value);
+	if clean.len() < 64 {
+		return Err(DeliveryError::Network(format!(
+			"Tron RPC error: constant result too short for uint256: {}",
+			clean.len()
+		)));
+	}
+	let word = &clean[clean.len() - 64..];
+	U256::from_str_radix(word, 16).map_err(|e| {
+		DeliveryError::Network(format!(
+			"Tron RPC error: failed to parse uint256 from constant result: {e}"
+		))
+	})
 }
 
 fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, DeliveryError> {
@@ -1152,11 +1387,17 @@ mod tests {
 	}
 
 	#[test]
-	fn test_not_implemented_error_prefix() {
-		let err = TronNativeDelivery::not_implemented("submit");
-		assert!(err
-			.to_string()
-			.contains("NotImplemented: tron_native submit is not implemented"));
+	fn test_encode_abi_address() {
+		let encoded = encode_abi_address(&[0x11u8; 20]);
+		assert_eq!(encoded.len(), 64);
+		assert!(encoded.ends_with(&hex::encode([0x11u8; 20])));
+	}
+
+	#[test]
+	fn test_parse_u256_data_word() {
+		let word = format!("{:064x}", 12345u64);
+		let parsed = parse_u256_data_word(&word).unwrap();
+		assert_eq!(parsed, U256::from(12345u64));
 	}
 
 	#[test]
