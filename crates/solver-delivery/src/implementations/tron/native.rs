@@ -15,8 +15,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use solver_account::AccountSigner;
 use solver_types::{
-	Address, ConfigSchema, Field, FieldType, H256, Log, LogFilter, NetworksConfig, Schema,
-	Transaction, TransactionHash, TransactionReceipt,
+	evm20_bytes_to_tron_hex41, format_address_for_log, Address, ConfigSchema, Field, FieldType,
+	H256, Log, LogFilter, NetworksConfig, Schema, Transaction, TransactionHash, TransactionReceipt,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -456,8 +456,17 @@ impl TronNativeDelivery {
 			)));
 		}
 
-		let owner_address = evm20_to_tron_hex41(signer.address().as_slice())?;
-		let contract_address = evm20_to_tron_hex41(&to.0)?;
+		let owner_address = evm20_bytes_to_tron_hex41(signer.address().as_slice())
+			.map_err(|e| DeliveryError::Network(format!("Tron RPC error: {e}")))?;
+		let contract_address = evm20_bytes_to_tron_hex41(&to.0)
+			.map_err(|e| DeliveryError::Network(format!("Tron RPC error: {e}")))?;
+		let owner_log = Address(signer.address().as_slice().to_vec());
+		tracing::debug!(
+			chain_id = tx.chain_id,
+			owner = %format_address_for_log(&owner_log),
+			contract = %format_address_for_log(to),
+			"Submitting transaction via Tron native wallet API"
+		);
 		let data = hex::encode(&tx.data);
 		let call_value: u64 = tx.value.try_into().map_err(|_| {
 			DeliveryError::Network("Tron RPC error: tx.value exceeds u64 for call_value".to_string())
@@ -1000,16 +1009,6 @@ fn wallet_url_from_rpc(rpc_url: &str, wallet_path: &str) -> Result<String, Deliv
 	url.set_fragment(None);
 	url.set_path(wallet_path);
 	Ok(url.to_string())
-}
-
-fn evm20_to_tron_hex41(evm20: &[u8]) -> Result<String, DeliveryError> {
-	if evm20.len() != 20 {
-		return Err(DeliveryError::Network(format!(
-			"Tron RPC error: expected 20-byte EVM address, got {}",
-			evm20.len()
-		)));
-	}
-	Ok(format!("41{}", hex::encode(evm20)))
 }
 
 fn classify_reqwest_error(err: reqwest::Error) -> AttemptError {

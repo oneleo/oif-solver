@@ -9,6 +9,7 @@ pub mod eip712;
 pub mod formatting;
 pub mod helpers;
 pub mod tests;
+pub mod tron_address;
 
 pub use constants::{
 	DEFAULT_GAS_PRICE_WEI, MOCK_ETH_SOL_PRICE, MOCK_ETH_USD_PRICE, MOCK_SOL_USD_PRICE,
@@ -27,3 +28,8 @@ pub use eip712::{
 };
 pub use formatting::{format_token_amount, truncate_id, with_0x_prefix, without_0x_prefix};
 pub use helpers::current_timestamp;
+pub use tron_address::{
+	evm20_bytes_to_tron_base58, evm20_bytes_to_tron_hex41, format_address_for_log,
+	looks_like_tron_base58, looks_like_tron_hex41, parse_tron_address, tron_base58_to_evm20_bytes,
+	tron_hex41_to_evm20_bytes,
+};

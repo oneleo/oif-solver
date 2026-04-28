@@ -1106,7 +1106,7 @@ pub fn build_runtime_config(operator_config: &OperatorConfig) -> Result<Config, 
 		},
 		networks,
 		storage: build_storage_config_from_operator(&operator_config.solver_id),
-		delivery: build_delivery_config_from_operator(&chain_ids),
+		delivery: build_delivery_config_from_operator(operator_config, &chain_ids),
 		account: build_account_config_from_operator(operator_config.account.as_ref()),
 		discovery: build_discovery_config_from_operator(&chain_ids)?,
 		order: build_order_config_from_operator(),
@@ -1217,19 +1217,89 @@ fn build_storage_config_from_operator(solver_id: &str) -> StorageConfig {
 }
 
 /// Builds DeliveryConfig from operator config.
-fn build_delivery_config_from_operator(chain_ids: &[u64]) -> DeliveryConfig {
+fn build_delivery_config_from_operator(
+	operator_config: &OperatorConfig,
+	chain_ids: &[u64],
+) -> DeliveryConfig {
 	let mut implementations = HashMap::new();
 
-	let network_ids_array =
-		serde_json::Value::Array(chain_ids.iter().map(|id| int(*id as i64)).collect());
+	let tron_chain_ids = detect_tron_chain_ids(operator_config, chain_ids);
+	let evm_chain_ids: Vec<u64> = chain_ids
+		.iter()
+		.copied()
+		.filter(|id| !tron_chain_ids.contains(id))
+		.collect();
 
-	let evm_alloy_config = json_object(vec![("network_ids", network_ids_array)]);
-	implementations.insert("evm_alloy".to_string(), evm_alloy_config);
+	if !evm_chain_ids.is_empty() {
+		let evm_network_ids_array =
+			serde_json::Value::Array(evm_chain_ids.iter().map(|id| int(*id as i64)).collect());
+		let evm_alloy_config = json_object(vec![("network_ids", evm_network_ids_array)]);
+		implementations.insert("evm_alloy".to_string(), evm_alloy_config);
+	}
+
+	if !tron_chain_ids.is_empty() {
+		let tron_network_ids_array =
+			serde_json::Value::Array(tron_chain_ids.iter().map(|id| int(*id as i64)).collect());
+		let mut accounts_map = serde_json::Map::new();
+		for chain_id in &tron_chain_ids {
+			accounts_map.insert(chain_id.to_string(), serde_json::Value::String("local_tron_shasta".to_string()));
+		}
+
+		let tron_native_config = json_object(vec![
+			("network_ids", tron_network_ids_array),
+			(
+				"accounts",
+				serde_json::Value::Object(accounts_map),
+			),
+		]);
+		implementations.insert("tron_native".to_string(), tron_native_config);
+	}
 
 	DeliveryConfig {
 		implementations,
 		min_confirmations: 3,
 	}
+}
+
+fn detect_tron_chain_ids(operator_config: &OperatorConfig, chain_ids: &[u64]) -> Vec<u64> {
+	// Allow explicit override from env, e.g. TRON_CHAIN_IDS=2494104990,728126428
+	if let Ok(raw) = std::env::var("TRON_CHAIN_IDS") {
+		let parsed = raw
+			.split(',')
+			.map(str::trim)
+			.filter(|s| !s.is_empty())
+			.filter_map(|s| s.parse::<u64>().ok())
+			.collect::<HashSet<_>>();
+		if !parsed.is_empty() {
+			let mut selected: Vec<u64> = chain_ids
+				.iter()
+				.copied()
+				.filter(|id| parsed.contains(id))
+				.collect();
+			selected.sort_unstable();
+			return selected;
+		}
+	}
+
+	// Auto-detect by network name containing "tron" (case-insensitive).
+	let mut out = chain_ids
+		.iter()
+		.copied()
+		.filter(|id| {
+			operator_config
+				.networks
+				.get(id)
+				.map(|n| n.name.to_lowercase().contains("tron"))
+				.unwrap_or(false)
+		})
+		.collect::<Vec<_>>();
+
+	// Conservative fallback for known Shasta chain ID if present.
+	if out.is_empty() && chain_ids.contains(&2494104990) {
+		out.push(2494104990);
+	}
+	out.sort_unstable();
+	out
 }
 
 /// Builds AccountConfig from operator config.
@@ -5698,13 +5768,50 @@ mod tests {
 
 	#[test]
 	fn test_build_delivery_config_from_operator() {
-		let chain_ids = vec![1, 10, 137];
-		let delivery = build_delivery_config_from_operator(&chain_ids);
+		let overrides = test_seed_overrides();
+		let op_config = merge_to_operator_config(overrides, &TESTNET_SEED).unwrap();
+		let chain_ids = op_config.networks.keys().copied().collect::<Vec<_>>();
+		let delivery = build_delivery_config_from_operator(&op_config, &chain_ids);
 
 		assert!(delivery.implementations.contains_key("evm_alloy"));
 		let evm_config = delivery.implementations.get("evm_alloy").unwrap();
 		let network_ids = evm_config.get("network_ids").unwrap().as_array().unwrap();
-		assert_eq!(network_ids.len(), 3);
+		assert_eq!(network_ids.len(), 2);
+		assert!(!delivery.implementations.contains_key("tron_native"));
+	}
+
+	#[test]
+	fn test_build_delivery_config_from_operator_with_tron_network() {
+		let overrides = test_seed_overrides();
+		let mut op_config = merge_to_operator_config(overrides, &TESTNET_SEED).unwrap();
+		let template = op_config.networks.values().next().unwrap().clone();
+		op_config.networks.clear();
+
+		let mut tron = template.clone();
+		tron.chain_id = 2494104990;
+		tron.name = "Tron Shasta Testnet".to_string();
+		op_config.networks.insert(2494104990, tron);
+
+		let mut hyper = template;
+		hyper.chain_id = 998;
+		hyper.name = "HyperEVM Testnet".to_string();
+		op_config.networks.insert(998, hyper);
+
+		let chain_ids = vec![2494104990, 998];
+		let delivery = build_delivery_config_from_operator(&op_config, &chain_ids);
+
+		assert!(delivery.implementations.contains_key("tron_native"));
+		assert!(delivery.implementations.contains_key("evm_alloy"));
+
+		let tron_cfg = delivery.implementations.get("tron_native").unwrap();
+		let tron_ids = tron_cfg.get("network_ids").unwrap().as_array().unwrap();
+		assert_eq!(tron_ids.len(), 1);
+		assert_eq!(tron_ids[0].as_i64(), Some(2494104990));
+		let accounts = tron_cfg.get("accounts").unwrap().as_object().unwrap();
+		assert_eq!(
+			accounts.get("2494104990").and_then(|v| v.as_str()),
+			Some("local_tron_shasta")
+		);
 	}
 
 	#[test]

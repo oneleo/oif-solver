@@ -119,7 +119,11 @@ pub fn get_all_implementations() -> Vec<(&'static str, AccountFactory)> {
 	use implementations::local;
 
 	#[allow(unused_mut)]
-	let mut impls = vec![(local::Registry::NAME, local::Registry::factory())];
+	let mut impls = vec![
+		(local::Registry::NAME, local::Registry::factory()),
+		// Alias used for chain-specific signer mapping (e.g. Tron Shasta).
+		("local_tron_shasta", local::create_account as AccountFactory),
+	];
 
 	#[cfg(feature = "kms")]
 	{

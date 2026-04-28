@@ -3,7 +3,7 @@
 //! This module defines types for blockchain addresses, signatures, and transactions
 //! that are used throughout the solver for account management and transaction processing.
 
-use crate::with_0x_prefix;
+use crate::{parse_address, with_0x_prefix};
 use alloy_primitives::{Address as AlloyAddress, Bytes, Signature as PrimitiveSignature, U256};
 use alloy_rpc_types::TransactionRequest;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -33,19 +33,7 @@ impl<'de> Deserialize<'de> for Address {
 		D: Deserializer<'de>,
 	{
 		let s = String::deserialize(deserializer)?;
-		let hex_str = s.trim_start_matches("0x");
-		let bytes = hex::decode(hex_str)
-			.map_err(|e| serde::de::Error::custom(format!("Invalid hex address: {e}")))?;
-
-		// Validate address length (should be 20 bytes for Ethereum addresses)
-		if bytes.len() != 20 {
-			return Err(serde::de::Error::custom(format!(
-				"Invalid address length: expected 20 bytes, got {}",
-				bytes.len()
-			)));
-		}
-
-		Ok(Address(bytes))
+		parse_address(&s).map_err(serde::de::Error::custom)
 	}
 }
 
@@ -217,31 +205,28 @@ mod tests {
 		let invalid_hex = "\"0xzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\"";
 		let result: Result<Address, _> = serde_json::from_str(invalid_hex);
 		assert!(result.is_err());
-		assert!(result
-			.unwrap_err()
-			.to_string()
-			.contains("Invalid hex address"));
+		assert!(result.unwrap_err().to_string().contains("Invalid hex"));
 	}
 
 	#[test]
-	fn test_address_deserialization_invalid_length() {
-		// Too short (19 bytes)
-		let too_short = "\"0xa0b86a33e6776fb78b3e1e6b2d0d2e8f0c1d2a\"";
-		let result: Result<Address, _> = serde_json::from_str(too_short);
-		assert!(result.is_err());
-		assert!(result
-			.unwrap_err()
-			.to_string()
-			.contains("Invalid address length"));
+	fn test_address_deserialization_normalizes_short_hex() {
+		// Short/partial hex is left-padded into 20-byte internal address.
+		let short = "\"0x1\"";
+		let parsed: Address = serde_json::from_str(short).unwrap();
+		assert_eq!(
+			parsed.to_string(),
+			"0x0000000000000000000000000000000000000001"
+		);
+	}
 
-		// Too long (21 bytes)
-		let too_long = "\"0xa0b86a33e6776fb78b3e1e6b2d0d2e8f0c1d2a3bff\"";
-		let result: Result<Address, _> = serde_json::from_str(too_long);
-		assert!(result.is_err());
-		assert!(result
-			.unwrap_err()
-			.to_string()
-			.contains("Invalid address length"));
+	#[test]
+	fn test_address_deserialization_tron_formats() {
+		let base58: Address =
+			serde_json::from_str("\"TG3XXyExBkPp9nzdajDZsozEu4BkaSJozs\"").unwrap();
+		let hex41: Address =
+			serde_json::from_str("\"0x4142A1E39AEFA49290F2B3F9ED688D7CECF86CD6E0\"").unwrap();
+		assert_eq!(base58, hex41);
+		assert_eq!(base58.to_string(), "0x42a1e39aefa49290f2b3f9ed688d7cecf86cd6e0");
 	}
 
 	#[test]

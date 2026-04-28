@@ -89,10 +89,12 @@ pub use standards::{
 };
 pub use storage::*;
 pub use utils::{
-	bytes32_to_address, current_timestamp, format_token_amount, normalize_bytes32_address,
-	parse_address, truncate_id, wei_string_to_eth_string, with_0x_prefix, without_0x_prefix,
-	DEFAULT_GAS_PRICE_WEI, MOCK_ETH_SOL_PRICE, MOCK_ETH_USD_PRICE, MOCK_SOL_USD_PRICE,
-	MOCK_TOKA_USD_PRICE, MOCK_TOKB_USD_PRICE,
+	bytes32_to_address, current_timestamp, evm20_bytes_to_tron_base58,
+	evm20_bytes_to_tron_hex41, format_address_for_log, format_token_amount,
+	normalize_bytes32_address, parse_address, parse_tron_address, tron_base58_to_evm20_bytes,
+	tron_hex41_to_evm20_bytes, truncate_id, wei_string_to_eth_string, with_0x_prefix,
+	without_0x_prefix, DEFAULT_GAS_PRICE_WEI, MOCK_ETH_SOL_PRICE, MOCK_ETH_USD_PRICE,
+	MOCK_SOL_USD_PRICE, MOCK_TOKA_USD_PRICE, MOCK_TOKB_USD_PRICE,
 };
 pub use validation::*;
 pub use versioned::Versioned;

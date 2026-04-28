@@ -6,6 +6,9 @@
 use crate::Address;
 
 use super::formatting::without_0x_prefix;
+use super::tron_address::{
+	looks_like_tron_base58, looks_like_tron_hex41, parse_tron_address, tron_hex41_to_evm20_bytes,
+};
 use alloy_primitives::{
 	hex,
 	utils::{format_ether, parse_ether},
@@ -144,10 +147,19 @@ pub fn parse_address(hex_str: &str) -> Result<Address, String> {
 		return Err("Address cannot be empty".to_string());
 	}
 
+	// Tron-specific formats are normalized into canonical 20-byte internal address format.
+	if looks_like_tron_base58(hex_str) {
+		return parse_tron_address(hex_str);
+	}
+
 	let hex_clean = without_0x_prefix(hex_str);
 
 	if hex_clean.is_empty() {
 		return Err("Address cannot be empty".to_string());
+	}
+
+	if looks_like_tron_hex41(hex_str) {
+		return tron_hex41_to_evm20_bytes(hex_clean).map(|v| Address(v.to_vec()));
 	}
 
 	// Handle U256 hex that's missing leading zeros (common with EIP-7683 inputs)
@@ -771,6 +783,24 @@ mod tests {
 		assert_eq!(
 			hex::encode(&result.0),
 			"5fbdb2315678afecb367f032d93f642f64180aa3"
+		);
+	}
+
+	#[test]
+	fn test_parse_address_tron_base58() {
+		let result = parse_address("TG3XXyExBkPp9nzdajDZsozEu4BkaSJozs").unwrap();
+		assert_eq!(
+			hex::encode(&result.0),
+			"42a1e39aefa49290f2b3f9ed688d7cecf86cd6e0"
+		);
+	}
+
+	#[test]
+	fn test_parse_address_tron_hex41() {
+		let result = parse_address("0x4142A1E39AEFA49290F2B3F9ED688D7CECF86CD6E0").unwrap();
+		assert_eq!(
+			hex::encode(&result.0),
+			"42a1e39aefa49290f2b3f9ed688d7cecf86cd6e0"
 		);
 	}
 
