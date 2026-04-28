@@ -21,7 +21,7 @@ pub mod implementations {
 		pub mod alloy;
 	}
 	pub mod tron {
-		pub mod http;
+		pub mod native;
 	}
 }
 
@@ -213,11 +213,11 @@ pub trait DeliveryRegistry: ImplementationRegistry<Factory = DeliveryFactory> {}
 /// Returns a vector of (name, factory) tuples for all available delivery implementations.
 /// This is used by the factory registry to automatically register all implementations.
 pub fn get_all_implementations() -> Vec<(&'static str, DeliveryFactory)> {
-	use implementations::{evm::alloy, tron::http as tron_http};
+	use implementations::{evm::alloy, tron::native as tron_native};
 
 	vec![
 		(alloy::Registry::NAME, alloy::Registry::factory()),
-		(tron_http::Registry::NAME, tron_http::Registry::factory()),
+		(tron_native::Registry::NAME, tron_native::Registry::factory()),
 	]
 }
 
