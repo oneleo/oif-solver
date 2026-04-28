@@ -20,6 +20,9 @@ pub mod implementations {
 	pub mod evm {
 		pub mod alloy;
 	}
+	pub mod tron {
+		pub mod http;
+	}
 }
 
 /// Errors that can occur during transaction delivery operations.
@@ -210,9 +213,12 @@ pub trait DeliveryRegistry: ImplementationRegistry<Factory = DeliveryFactory> {}
 /// Returns a vector of (name, factory) tuples for all available delivery implementations.
 /// This is used by the factory registry to automatically register all implementations.
 pub fn get_all_implementations() -> Vec<(&'static str, DeliveryFactory)> {
-	use implementations::evm::alloy;
+	use implementations::{evm::alloy, tron::http as tron_http};
 
-	vec![(alloy::Registry::NAME, alloy::Registry::factory())]
+	vec![
+		(alloy::Registry::NAME, alloy::Registry::factory()),
+		(tron_http::Registry::NAME, tron_http::Registry::factory()),
+	]
 }
 
 /// Service that manages transaction delivery across multiple blockchain networks.
