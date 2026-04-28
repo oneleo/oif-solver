@@ -3,13 +3,15 @@
 //! Contains hardcoded configuration for testnet networks:
 //! - Optimism Sepolia (chain ID: 11155420)
 //! - Base Sepolia (chain ID: 84532)
+//! - Tron Shasta (chain ID: 2494104990)
+//! - HyperEVM Testnet (chain ID: 998)
 
 use super::types::{NetworkSeed, SeedConfig, COMMON_DEFAULTS};
 use alloy_primitives::address;
 
 /// Testnet seed configuration.
 pub static TESTNET_SEED: SeedConfig = SeedConfig {
-	networks: &[OPTIMISM_SEPOLIA, BASE_SEPOLIA],
+	networks: &[OPTIMISM_SEPOLIA, BASE_SEPOLIA, TRON_SHASTA, HYPEREVM_TESTNET],
 	defaults: COMMON_DEFAULTS,
 };
 
@@ -55,13 +57,53 @@ pub static BASE_SEPOLIA: NetworkSeed = NetworkSeed {
 	hyperlane_oracle: address!("3f1ED0CEf17842C8cD47CcbaDf534eaB6BEf5d46"),
 };
 
+/// Tron Shasta testnet seed (chain ID: 2494104990).
+pub static TRON_SHASTA: NetworkSeed = NetworkSeed {
+	chain_id: 2494104990,
+	name: "tron-shasta",
+	default_rpc_urls: &["https://api.shasta.trongrid.io/jsonrpc"],
+	// Permit2/EIP-3009 escrow input settler (N/A on Tron for now, reuse input settler)
+	input_settler: address!("16f1c40c13634f4a97d8004453ed86b7189583bc"),
+	// Output settler
+	output_settler: address!("3274dd713c02aaf9cbbba913733177d9a40c0a03"),
+	// Compact/resource-lock is not deployed on Shasta in this setup
+	input_settler_compact: address!("16f1c40c13634f4a97d8004453ed86b7189583bc"),
+	// The Compact contract (placeholder until Tron-native equivalent exists)
+	the_compact: address!("0000000000000000000000000000000000000000"),
+	// Allocator placeholder
+	allocator: address!("0000000000000000000000000000000000000000"),
+	// Hyperlane contracts
+	hyperlane_mailbox: address!("B50E9F9CB52543D754768dD67f1e6148ABd78B0B"),
+	hyperlane_igp: address!("0000000000000000000000000000000000000000"),
+	hyperlane_oracle: address!("2136957a89d3552e260b8dd4134c2c66d37db044"),
+};
+
+/// HyperEVM testnet seed (chain ID: 998).
+pub static HYPEREVM_TESTNET: NetworkSeed = NetworkSeed {
+	chain_id: 998,
+	name: "hyperevm-testnet",
+	default_rpc_urls: &["https://rpc.hyperliquid-testnet.xyz/evm"],
+	// Input settler is currently not used on this route
+	input_settler: address!("0000000000000000000000000000000000000000"),
+	// Output settler
+	output_settler: address!("e241df14e36c639610e6f564a74b0bc9350dbc60"),
+	// Compact/resource-lock placeholders
+	input_settler_compact: address!("0000000000000000000000000000000000000000"),
+	the_compact: address!("0000000000000000000000000000000000000000"),
+	allocator: address!("0000000000000000000000000000000000000000"),
+	// Hyperlane contracts
+	hyperlane_mailbox: address!("589C201a07c26b4725A4A829d772f24423da480B"),
+	hyperlane_igp: address!("0000000000000000000000000000000000000000"),
+	hyperlane_oracle: address!("bAe9c270727bD11Bf1b7F358526B1bf6c463ff28"),
+};
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 
 	#[test]
 	fn test_testnet_seed_networks() {
-		assert_eq!(TESTNET_SEED.networks.len(), 2);
+		assert_eq!(TESTNET_SEED.networks.len(), 4);
 	}
 
 	#[test]
@@ -93,9 +135,11 @@ mod tests {
 	#[test]
 	fn test_supported_chain_ids() {
 		let chain_ids = TESTNET_SEED.supported_chain_ids();
-		assert_eq!(chain_ids.len(), 2);
+		assert_eq!(chain_ids.len(), 4);
 		assert!(chain_ids.contains(&11155420));
 		assert!(chain_ids.contains(&84532));
+		assert!(chain_ids.contains(&2494104990));
+		assert!(chain_ids.contains(&998));
 	}
 
 	#[test]

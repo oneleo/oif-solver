@@ -328,21 +328,22 @@ docker run -it --rm \
 The solver binds to `0.0.0.0:3000` by default, which works for Docker deployments.
 
 For Redis connectivity from within Docker:
+
 - **Docker Compose:** Use service name (e.g., `redis://redis:6379`)
 - **Host machine Redis:** Use `redis://host.docker.internal:6379` (Mac/Windows)
 - **External Redis:** Use full URL (e.g., `redis://your-redis-host:6379`)
 
 ### Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `REDIS_URL` | Yes | Redis connection URL (for production, use managed services like AWS ElastiCache) |
-| `SOLVER_ID` | For loading | Solver ID to load config from Redis (after first seed) |
-| `RUST_LOG` | No | Log level (default: `info`) |
-| `SOLVER_PRIVATE_KEY` | Conditional | Required for local wallet if no inline `private_key` in bootstrap config |
-| `AWS_ACCESS_KEY_ID` | For KMS | AWS access key (if using KMS signer) |
-| `AWS_SECRET_ACCESS_KEY` | For KMS | AWS secret key (if using KMS signer) |
-| `AWS_REGION` | For KMS | AWS region (if using KMS signer, default: from config) |
+| Variable                | Required    | Description                                                                      |
+| ----------------------- | ----------- | -------------------------------------------------------------------------------- |
+| `REDIS_URL`             | Yes         | Redis connection URL (for production, use managed services like AWS ElastiCache) |
+| `SOLVER_ID`             | For loading | Solver ID to load config from Redis (after first seed)                           |
+| `RUST_LOG`              | No          | Log level (default: `info`)                                                      |
+| `SOLVER_PRIVATE_KEY`    | Conditional | Required for local wallet if no inline `private_key` in bootstrap config         |
+| `AWS_ACCESS_KEY_ID`     | For KMS     | AWS access key (if using KMS signer)                                             |
+| `AWS_SECRET_ACCESS_KEY` | For KMS     | AWS secret key (if using KMS signer)                                             |
+| `AWS_REGION`            | For KMS     | AWS region (if using KMS signer, default: from config)                           |
 
 **Note:** `SOLVER_PRIVATE_KEY` is required when using the local wallet without an inline `private_key` in bootstrap config. Not needed if using KMS or providing `private_key` directly in the JSON.
 
@@ -350,8 +351,8 @@ For Redis connectivity from within Docker:
 
 ### Volume Mounts
 
-| Mount | Purpose |
-|-------|---------|
+| Mount         | Purpose                                                         |
+| ------------- | --------------------------------------------------------------- |
 | `/app/config` | Bootstrap config JSON file (read-only, only needed for seeding) |
 
 See [docs/config-storage.md](docs/config-storage.md) for detailed documentation.
@@ -372,6 +373,9 @@ cargo run -- --seed testnet --bootstrap-config config/seed-overrides-testnet.jso
 # Seed mainnet configuration (uses mainnet preset fallbacks where applicable)
 cargo run -- --seed mainnet --bootstrap-config config/seed-overrides-mainnet.json
 
+# Seed Tron Shasta <-> HyperEVM testnet (explicit bidirectional Hyperlane routes)
+cargo run -- --seed testnet --bootstrap-config config/seed-overrides-tron-hyperevm-testnet.json
+
 # Seed using a non-seeded networks JSON example
 cargo run -- --seed testnet --bootstrap-config config/non-seeded-networks-example.json
 
@@ -383,21 +387,23 @@ cargo run -- --seed testnet --bootstrap-config config/seed-overrides-testnet.jso
 ```
 
 Legacy alias support:
+
 - `--seed-overrides` is still accepted temporarily as a deprecated alias for `--bootstrap-config`.
 
 ### Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `REDIS_URL` | Yes | Redis connection URL (default: `redis://localhost:6379`). For production, use managed services like AWS ElastiCache |
-| `SOLVER_PRIVATE_KEY` | Conditional | 64-character hex private key (without 0x prefix) |
-| `SOLVER_ID` | For loading | Solver ID to load from Redis (set after first seed) |
+| Variable             | Required    | Description                                                                                                         |
+| -------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------- |
+| `REDIS_URL`          | Yes         | Redis connection URL (default: `redis://localhost:6379`). For production, use managed services like AWS ElastiCache |
+| `SOLVER_PRIVATE_KEY` | Conditional | 64-character hex private key (without 0x prefix)                                                                    |
+| `SOLVER_ID`          | For loading | Solver ID to load from Redis (set after first seed)                                                                 |
 
 `SOLVER_PRIVATE_KEY` is only required when using the local wallet without an inline `private_key` in bootstrap config. Not needed if using KMS or providing `private_key` directly in the JSON.
 
 ### Bootstrap Config Format
 
 Create a bootstrap JSON file specifying which networks to support. Networks can be:
+
 - Seeded networks (from the selected preset)
 - Non-seeded networks (new chain IDs) when full required fields are provided
 
@@ -447,6 +453,7 @@ Optional fee overrides can be set at the top level: `min_profitability_pct` (dec
 Optional network types are: `parent`, `hub`, and `new`.
 
 For non-seeded networks, the following fields are required per network:
+
 - `name`
 - `type`
 - `input_settler_address`
@@ -454,6 +461,7 @@ For non-seeded networks, the following fields are required per network:
 - `rpc_urls` (at least one URL)
 
 Compact addresses are optional:
+
 - `input_settler_compact_address`
 - `the_compact_address`
 - `allocator_address`
@@ -461,6 +469,7 @@ Compact addresses are optional:
 ### Settlement Selection (`settlement.type`)
 
 Settlement implementation is selected from bootstrap config JSON:
+
 - `hyperlane` (default when omitted)
 - `direct`
 - `broadcaster`
@@ -522,11 +531,13 @@ Note the `KeyId` from the output.
 ```json
 {
   "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Action": ["kms:Sign", "kms:GetPublicKey"],
-    "Resource": "arn:aws:kms:REGION:ACCOUNT:key/KEY_ID"
-  }]
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["kms:Sign", "kms:GetPublicKey"],
+      "Resource": "arn:aws:kms:REGION:ACCOUNT:key/KEY_ID"
+    }
+  ]
 }
 ```
 
@@ -557,11 +568,11 @@ Configure KMS in your bootstrap config JSON:
 }
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `key_id` | Yes | KMS key ID or full ARN |
-| `region` | Yes | AWS region (e.g., `us-east-1`) |
-| `endpoint` | No | Custom endpoint URL (for LocalStack testing) |
+| Field      | Required | Description                                  |
+| ---------- | -------- | -------------------------------------------- |
+| `key_id`   | Yes      | KMS key ID or full ARN                       |
+| `region`   | Yes      | AWS region (e.g., `us-east-1`)               |
+| `endpoint` | No       | Custom endpoint URL (for LocalStack testing) |
 
 #### Running with KMS
 
@@ -796,7 +807,6 @@ sequenceDiagram
 #### Orders
 
 - **POST `/api/v1/orders`** - Submit a new order (direct or from quote)
-
   - Quote acceptance:
     ```json
     {
@@ -828,7 +838,6 @@ sequenceDiagram
 #### Assets
 
 - **GET `/api/v1/assets`** - Get all supported assets across all networks
-
   - Returns a map of chain IDs to network configurations with supported assets, including network `name`/`type` and asset `name`
 
 - **GET `/api/v1/assets/{chain_id}`** - Get supported assets for a specific chain
@@ -1088,6 +1097,7 @@ cargo run -- --log-level info
 The solver includes automated cross-chain token rebalancing. A background monitor checks balances at a configurable interval and automatically bridges tokens when they drift outside a target band.
 
 **Key features:**
+
 - Threshold-based auto-trigger with configurable target balance and deviation band per pair
 - Safety guards: cooldowns, max concurrent transfers, per-pair locking, transaction serialization
 - Manual trigger and admin resolution via EIP-712 signed API endpoints
@@ -1313,7 +1323,6 @@ The demo tool generates files in the `.oif-demo/requests/` directory following a
 The demo tool provides a complete workflow for setting up a test environment:
 
 1. **Initialize Configuration** (`init new` / `init load` / `init load-storage`):
-
    - Creates or loads solver configuration
    - Can load runtime config directly from storage backend (`init load-storage`)
    - Sets up network definitions and RPC endpoints
@@ -1321,13 +1330,11 @@ The demo tool provides a complete workflow for setting up a test environment:
    - Stores session data in `.oif-demo/` directory
 
 2. **Start Blockchain Networks** (`env start`):
-
    - Launches Anvil chains (default: 31337 on port 8545, 31338 on port 8546)
    - Manages chain processes in the background
    - Validates connectivity to each chain
 
 3. **Deploy Smart Contracts** (`env deploy`):
-
    - Deploys test tokens (TokenA, TokenB) on configured chains
    - Deploys escrow settlers (InputSettler, OutputSettler)
    - Deploys compact settlers and Permit2 contracts

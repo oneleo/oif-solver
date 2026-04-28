@@ -1,0 +1,75 @@
+{
+  "solver_id": "tron-shasta-hyperevm-testnet",
+  "solver_name": "OIF Tron Shasta <-> HyperEVM Testnet",
+  "networks": [
+    {
+      "chain_id": 2494104990,
+      "name": "tron-shasta",
+      "type": "parent",
+      "tokens": [
+        {
+          "symbol": "USDT",
+          "name": "Tether USD",
+          "address": "0x42A1E39AEFA49290F2B3F9ED688D7CECF86CD6E0",
+          "decimals": 6
+        }
+      ],
+      "rpc_urls": [
+        "${TRON_SHASTA_RPC_URL:-https://api.shasta.trongrid.io/jsonrpc}"
+      ]
+    },
+    {
+      "chain_id": 998,
+      "name": "hyperevm-testnet",
+      "type": "hub",
+      "tokens": [
+        {
+          "symbol": "USDC",
+          "name": "USD Coin",
+          "address": "0x2B3370eE501B4a559b57D449569354196457D8Ab",
+          "decimals": 6
+        }
+      ],
+      "rpc_urls": [
+        "${HYPEREVM_TESTNET_RPC_URL:-https://rpc.hyperliquid-testnet.xyz/evm}"
+      ]
+    }
+  ],
+  "settlement": {
+    "type": "hyperlane",
+    "priority": ["hyperlane"],
+    "hyperlane": {
+      "default_gas_limit": 500000,
+      "message_timeout_seconds": 600,
+      "finalization_required": true,
+      "mailboxes": {
+        "2494104990": "0xB50E9F9CB52543D754768dD67f1e6148ABd78B0B",
+        "998": "0x589C201a07c26b4725A4A829d772f24423da480B"
+      },
+      "igp_addresses": {
+        "2494104990": "${TRON_HYPERLANE_IGP_ADDRESS:-0x0000000000000000000000000000000000000000}",
+        "998": "${HYPEREVM_HYPERLANE_IGP_ADDRESS:-0x0000000000000000000000000000000000000000}"
+      },
+      "oracles": {
+        "input": {
+          "2494104990": ["0x2136957a89d3552e260b8dd4134c2c66d37db044"],
+          "998": ["0xbAe9c270727bD11Bf1b7F358526B1bf6c463ff28"]
+        },
+        "output": {
+          "2494104990": ["0x2136957a89d3552e260b8dd4134c2c66d37db044"],
+          "998": ["0xbAe9c270727bD11Bf1b7F358526B1bf6c463ff28"]
+        }
+      },
+      "routes": {
+        "2494104990": [998],
+        "998": [2494104990]
+      }
+    }
+  },
+  "auth_enabled": false,
+  "admin": {
+    "enabled": true,
+    "domain": "localhost",
+    "admin_addresses": ["0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"]
+  }
+}

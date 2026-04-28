@@ -5,6 +5,7 @@ This document describes how to use the Redis-based configuration storage system 
 ## Overview
 
 The solver uses Redis as the single source of truth for runtime configuration. Configuration is:
+
 - **Seeded once** when deploying a new solver
 - **Loaded from Redis** on subsequent startups
 - **Versioned** with optimistic locking for safe updates
@@ -33,6 +34,9 @@ cargo run -- --seed testnet --bootstrap-config config/seed-overrides-testnet.jso
 # Seed mainnet configuration (preset fallback for known chains)
 cargo run -- --seed mainnet --bootstrap-config config/seed-overrides-mainnet.json
 
+# Seed Tron Shasta <-> HyperEVM testnet (explicit bidirectional Hyperlane routes)
+cargo run -- --seed testnet --bootstrap-config config/seed-overrides-tron-hyperevm-testnet.json
+
 # Seed using a non-seeded networks JSON example
 cargo run -- --seed testnet --bootstrap-config config/non-seeded-networks-example.json
 
@@ -49,16 +53,17 @@ cargo run --
 
 ## CLI Flags
 
-| Flag | Description |
-|------|-------------|
-| `--seed <preset>` | Seed configuration using a preset (`testnet` or `mainnet`) |
-| `--bootstrap-config <value>` | Bootstrap config as JSON file path OR raw JSON string |
-| `--seed-overrides <value>` | Deprecated alias for `--bootstrap-config` |
-| `--force-seed` | Overwrite existing configuration in Redis |
+| Flag                         | Description                                                |
+| ---------------------------- | ---------------------------------------------------------- |
+| `--seed <preset>`            | Seed configuration using a preset (`testnet` or `mainnet`) |
+| `--bootstrap-config <value>` | Bootstrap config as JSON file path OR raw JSON string      |
+| `--seed-overrides <value>`   | Deprecated alias for `--bootstrap-config`                  |
+| `--force-seed`               | Overwrite existing configuration in Redis                  |
 
 ## Bootstrap Config Format
 
 Bootstrap config specifies which networks your solver will support. Networks can be:
+
 - Preset-backed (`mainnet` / `testnet` seed)
 - Non-seeded (new chain IDs) when required fields are provided
 
@@ -94,25 +99,26 @@ Bootstrap config specifies which networks your solver will support. Networks can
 
 ### Fields
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `solver_id` | No | Unique solver identifier. If provided, enables idempotent seeding. If omitted, a UUID is generated. |
-| `monitoring_timeout_seconds` | No | Top-level solver monitoring timeout in seconds. Controls how long post-fill settlement monitoring keeps polling for claim readiness. Valid range: `30` to `1209600` seconds. Defaults to seed/common default (`28800`). Long-latency broadcaster routes may need values like `864000` (10 days). |
-| `networks` | Yes | Array of networks to support |
-| `networks[].chain_id` | Yes | Chain ID (seeded or non-seeded) |
-| `networks[].tokens` | Yes | Tokens for this network (can be empty at boot) |
-| `networks[].tokens[].symbol` | Yes | Token symbol (e.g., "USDC") |
-| `networks[].tokens[].address` | Yes | Token contract address |
-| `networks[].tokens[].decimals` | Yes | Token decimals |
-| `networks[].rpc_urls` | No | Custom RPC URLs (falls back to seed defaults) |
-| `settlement.type` | No | `"hyperlane"` (default), `"direct"`, or `"broadcaster"` |
-| `settlement.hyperlane` | Conditional | Required for non-seeded chains when `settlement.type = "hyperlane"` |
-| `settlement.direct` | Conditional | Required when `settlement.type = "direct"` |
-| `settlement.broadcaster` | Conditional | Required when `settlement.type = "broadcaster"` |
+| Field                          | Required    | Description                                                                                                                                                                                                                                                                                      |
+| ------------------------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `solver_id`                    | No          | Unique solver identifier. If provided, enables idempotent seeding. If omitted, a UUID is generated.                                                                                                                                                                                              |
+| `monitoring_timeout_seconds`   | No          | Top-level solver monitoring timeout in seconds. Controls how long post-fill settlement monitoring keeps polling for claim readiness. Valid range: `30` to `1209600` seconds. Defaults to seed/common default (`28800`). Long-latency broadcaster routes may need values like `864000` (10 days). |
+| `networks`                     | Yes         | Array of networks to support                                                                                                                                                                                                                                                                     |
+| `networks[].chain_id`          | Yes         | Chain ID (seeded or non-seeded)                                                                                                                                                                                                                                                                  |
+| `networks[].tokens`            | Yes         | Tokens for this network (can be empty at boot)                                                                                                                                                                                                                                                   |
+| `networks[].tokens[].symbol`   | Yes         | Token symbol (e.g., "USDC")                                                                                                                                                                                                                                                                      |
+| `networks[].tokens[].address`  | Yes         | Token contract address                                                                                                                                                                                                                                                                           |
+| `networks[].tokens[].decimals` | Yes         | Token decimals                                                                                                                                                                                                                                                                                   |
+| `networks[].rpc_urls`          | No          | Custom RPC URLs (falls back to seed defaults)                                                                                                                                                                                                                                                    |
+| `settlement.type`              | No          | `"hyperlane"` (default), `"direct"`, or `"broadcaster"`                                                                                                                                                                                                                                          |
+| `settlement.hyperlane`         | Conditional | Required for non-seeded chains when `settlement.type = "hyperlane"`                                                                                                                                                                                                                              |
+| `settlement.direct`            | Conditional | Required when `settlement.type = "direct"`                                                                                                                                                                                                                                                       |
+| `settlement.broadcaster`       | Conditional | Required when `settlement.type = "broadcaster"`                                                                                                                                                                                                                                                  |
 
 ### Required Fields For Non-Seeded Networks
 
 For each non-seeded network, provide:
+
 - `name`
 - `type`
 - `input_settler_address`
@@ -120,6 +126,7 @@ For each non-seeded network, provide:
 - `rpc_urls` (at least one URL)
 
 Optional per-network fields:
+
 - `input_settler_compact_address`
 - `the_compact_address`
 - `allocator_address`
@@ -177,11 +184,11 @@ Example `direct` settlement:
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `REDIS_URL` | Yes | `redis://localhost:6379` | Redis connection URL |
-| `SOLVER_PRIVATE_KEY` | Yes | - | 64-character hex private key (without 0x prefix) |
-| `SOLVER_ID` | For loading | - | Solver ID to load from Redis (required when not seeding) |
+| Variable             | Required    | Default                  | Description                                              |
+| -------------------- | ----------- | ------------------------ | -------------------------------------------------------- |
+| `REDIS_URL`          | Yes         | `redis://localhost:6379` | Redis connection URL                                     |
+| `SOLVER_PRIVATE_KEY` | Yes         | -                        | 64-character hex private key (without 0x prefix)         |
+| `SOLVER_ID`          | For loading | -                        | Solver ID to load from Redis (required when not seeding) |
 
 **Note:** After seeding, the solver outputs the `SOLVER_ID` to use for subsequent runs. Set this environment variable before running without `--bootstrap-config`.
 
@@ -189,18 +196,18 @@ Example `direct` settlement:
 
 ### Testnet Preset
 
-| Chain | Chain ID | Name |
-|-------|----------|------|
+| Chain            | Chain ID | Name             |
+| ---------------- | -------- | ---------------- |
 | Optimism Sepolia | 11155420 | optimism-sepolia |
-| Base Sepolia | 84532 | base-sepolia |
+| Base Sepolia     | 84532    | base-sepolia     |
 
 ### Mainnet Preset
 
-| Chain | Chain ID | Name |
-|-------|----------|------|
-| Optimism | 10 | optimism |
-| Base | 8453 | base |
-| Arbitrum | 42161 | arbitrum |
+| Chain    | Chain ID | Name     |
+| -------- | -------- | -------- |
+| Optimism | 10       | optimism |
+| Base     | 8453     | base     |
+| Arbitrum | 42161    | arbitrum |
 
 You can also seed non-seeded chain IDs with the required non-seeded network fields and settlement config.
 
@@ -243,7 +250,9 @@ Configuration in Redis includes version tracking:
 
 ```json
 {
-  "data": { /* full config */ },
+  "data": {
+    /* full config */
+  },
   "version": 1,
   "updated_at": 1705849200
 }
@@ -266,6 +275,7 @@ Example: `oif-solver:config:solver-abc123-def456-...`
 ### "Configuration not found for solver"
 
 The solver ID in your environment doesn't have configuration in Redis. Either:
+
 - Run with `--bootstrap-config` to create new configuration
 - Check `SOLVER_ID` environment variable matches an existing solver
 
@@ -280,6 +290,7 @@ cargo run -- --seed testnet --bootstrap-config config/seed-overrides-testnet.jso
 ### "Private key must be 64 hex characters"
 
 Ensure your private key:
+
 - Is exactly 64 hex characters (32 bytes)
 - Does NOT include the `0x` prefix
 - Is exported in your shell: `export SOLVER_PRIVATE_KEY=...`
@@ -297,12 +308,12 @@ redis-cli ping
 
 When running, the solver exposes these API endpoints:
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/v1/tokens` | GET | List supported tokens |
-| `/api/v1/quotes` | POST | Request a quote |
-| `/api/v1/orders` | POST | Submit an order |
-| `/api/v1/orders/{id}` | GET | Get order status |
+| Endpoint              | Method | Description           |
+| --------------------- | ------ | --------------------- |
+| `/api/v1/tokens`      | GET    | List supported tokens |
+| `/api/v1/quotes`      | POST   | Request a quote       |
+| `/api/v1/orders`      | POST   | Submit an order       |
+| `/api/v1/orders/{id}` | GET    | Get order status      |
 
 The API server runs on `127.0.0.1:3000` by default.
 
